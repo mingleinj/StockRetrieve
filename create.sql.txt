@@ -1,0 +1,24 @@
+CREATE TABLE `stockscreener` (
+  `id` int(11) NOT NULL,
+  `ticker` varchar(45) DEFAULT NULL,
+  `company` varchar(45) DEFAULT NULL,
+  `sector` varchar(45) DEFAULT NULL,
+  `industry` varchar(45) DEFAULT NULL,
+  `country` varchar(45) DEFAULT NULL,
+  `marketcap` decimal(10,3) DEFAULT NULL,
+  `PE` decimal(8,3) DEFAULT NULL,
+  `ForwardPE` decimal(8,3) DEFAULT NULL,
+  `PEG` decimal(8,3) DEFAULT NULL,
+  `PS` decimal(8,3) DEFAULT NULL,
+  `PB` decimal(8,3) DEFAULT NULL,
+  `PCash` decimal(8,3) DEFAULT NULL,
+  `PFreeCashFlow` decimal(10,3) DEFAULT NULL,
+  `DividendYield` decimal(8,3) DEFAULT NULL,
+  `PayoutRatio` decimal(8,3) DEFAULT NULL,
+  `EPS` decimal(8,3) DEFAULT NULL,
+  `EPSgrowththisyear` decimal(8,3) DEFAULT NULL,
+  `EPS growth next year` decimal(8,3) DEFAULT NULL,
+  `EPS growth past 5 years` decimal(8,3) DEFAULT NULL,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8$$
+
