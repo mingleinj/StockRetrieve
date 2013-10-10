@@ -25,6 +25,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.StringTokenizer;
 import java.util.TreeMap;
+import java.util.zip.DataFormatException;
 
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
@@ -32,6 +33,7 @@ import org.apache.http.client.ClientProtocolException;
 import org.apache.http.client.HttpClient;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.impl.client.DefaultHttpClient;
+import org.apache.http.util.EntityUtils;
 import org.jsoup.HttpStatusException;
 import org.jsoup.Jsoup;
 import org.jsoup.nodes.Document;
@@ -46,7 +48,943 @@ import com.google.cloud.sql.Driver;
 
 public class StockRetriever {
 	
+	@Test
+	public void retrieve_DebpershareFromAdvfn_quarterly() throws ClientProtocolException, IOException, DataFormatException, Exception
+	{
+	    
+		try {
 	
+			Class.forName("com.mysql.jdbc.Driver");
+	
+		} catch (ClassNotFoundException e) {
+	
+			System.out.println("Where is your MySQL JDBC Driver?");
+			e.printStackTrace();
+			return;
+	
+		}
+	
+		System.out.println("MySQL JDBC Driver Registered!");
+		Connection dbconnection = null;
+	
+		try {
+			dbconnection = DriverManager.getConnection("jdbc:mysql://localhost:3306/stock",
+			"root", "M1ng@2011");
+	
+		} catch (SQLException e) {
+			System.out.println("Connection Failed! Check output console");
+			e.printStackTrace();
+			return;
+		}
+	
+		if (dbconnection != null) {
+			System.out.println("You made it, take control your database now!");
+		} else {
+			System.out.println("Failed to make connection!");
+		}
+
+
+		ArrayList<String> tickets = new ArrayList<String>();
+
+		try
+		{
+	
+			//csv file containing data
+			String strFile = "/Users/minglei/Documents/StockDataInMysql/sp4571.csv";
+			//String strFile = "c:\\test\\nasdaq2000.csv";
+			//create BufferedReader to read csv file
+			BufferedReader br = new BufferedReader( new FileReader(strFile));
+			String strLine = "";
+			StringTokenizer st = null;
+			int lineNumber = 0, tokenNumber = 0;
+		
+			//read comma separated file line by line
+			while( (strLine = br.readLine()) != null)
+			{
+				if(!strLine.isEmpty()&& strLine.length()>0)
+				tickets.add(strLine);
+			}
+	
+	
+		}
+		catch(Exception e)
+		{
+			System.out.println("Exception while reading csv file: " + e);
+		}
+		//List<String> tickers = new ArrayList<String>();
+		//tickers.add("GOOG"); tickers.add("JPM"); //tickers.add("AAPL"); tickers.add("GE"); tickers.add("F");
+		for(String ticker: tickets)
+		{	
+			String str_url = "http://ih.advfn.com/p.php?pid=financials&btn=quarterly_reports&ctl00%24sb3%24tbq1=Get+Quote&as_values_IH=&ctl00%24sb3%24stb1=Search+iHub&mode=&symbol=" +ticker;
+			System.out.println(str_url);
+		
+		    try
+		    {
+				Document doc = Jsoup.connect(str_url).timeout(60000).get();
+			
+				Elements els = doc.select("span").attr("style", "text-transform: capitalize");
+			
+				for(Element el: els)
+				{	
+					Elements tables = el.select("table");
+					if(tables!=null)
+					{	
+						if(tables.size()>1)
+						{	
+							Element tb1 = tables.get(1);
+							//System.out.println(tb1);
+							Elements trs = tb1.select("tr");
+							Element tr2 = trs.get(0);
+							Elements tds2 = tr2.select("td");
+							Element td2 = tds2.get(0);
+							Element tb2 = td2.select("table").get(0);
+							Elements tr2s = tb2.select("tr");
+						
+							Map<String, List<String>> aMap = new HashMap<String, List<String>> ();
+						
+							for(Element tr: tr2s)
+							{
+								List<String> alist = new ArrayList<String>();
+								Elements tds = tr.select("td");
+								int i =0;
+								for(Element td: tds)
+								{
+									if(td.hasAttr("colspan"))
+									{
+										continue;
+								
+									}
+									else
+									{	
+										if(i==0)
+										{	
+											aMap.put(td.text(), alist);
+										}
+										if(i>0)
+										{
+											if(!td.text().equals(""))
+												alist.add(td.text());
+										}
+									}	
+							
+									System.out.println(td.text()+ " i=" +i);
+									i++;		
+								}
+							}
+							System.out.println(aMap);
+						
+							List<String> longdebt = new ArrayList<String>();
+							List<String> shortdebt = new ArrayList<String>();
+							List<String> totalshare = new ArrayList<String>();
+							List<String> timeperiods = new ArrayList<String>();
+							List<String> totallias = new ArrayList<String>();
+							
+							for(String key: aMap.keySet())
+							{	
+								if("quarter end date".equalsIgnoreCase(key)){
+									timeperiods = aMap.get(key);
+								}
+								if("long-term debt".equalsIgnoreCase(key)){
+									longdebt = aMap.get(key);
+								}
+								if("short-term debt".equalsIgnoreCase(key)){
+									shortdebt = aMap.get(key);
+								}
+								if("Total Liabilities".equalsIgnoreCase(key)){
+									totallias = aMap.get(key);
+								}
+								
+								if("total common shares out".equalsIgnoreCase(key)){
+									totalshare = aMap.get(key);
+								}
+							}	
+							String patternOne = "#,##0.00";
+							DecimalFormat nf = new DecimalFormat(patternOne);
+							for(int k=0; k<longdebt.size(); k++)
+							{	
+							
+								String insertsql = "INSERT INTO stock.debtPerShare (ticker, day, year, quarter, longdebt, shortdebt, totalshare, totalLiability) VALUES (?,?,?,?,?,?,?,?)";
+								PreparedStatement s = dbconnection.prepareStatement(insertsql);
+								s.setString(1,ticker);
+								
+								s.setString(2,timeperiods.get(k));  
+								System.out.println(timeperiods.get(k));
+								if(!(timeperiods.get(k).equals("") || timeperiods.get(k).equals("0000/00") ||timeperiods.get(k).equals("0000/0") || timeperiods.get(k).equals("0000-00") ||timeperiods.get(k).equals("0000-0")))
+								{	
+									SimpleDateFormat dateFormatter = new SimpleDateFormat("yyyy/MM");
+									Date day = new Date();
+									try
+									{
+										day = dateFormatter.parse(timeperiods.get(k));
+									}	
+									catch(ParseException e)
+									{
+										SimpleDateFormat dateFormatter2 = new SimpleDateFormat("yyyy-MM");
+										day = dateFormatter2.parse(timeperiods.get(k));
+									}
+										
+									s.setInt(3, (day.getYear()+1900));
+									if(((day.getMonth()+1)<=3) && ((day.getMonth()+1)>=1))
+									{	
+										s.setInt(4, 1);
+									}	
+									if(((day.getMonth()+1)<=6) && ((day.getMonth()+1)>=4))
+									{	
+										s.setInt(4, 2);
+									}	
+									if(((day.getMonth()+1)<=9) && ((day.getMonth()+1)>=6))
+									{	
+										s.setInt(4, 3);
+									}	
+									if(((day.getMonth()+1)<=12) && ((day.getMonth() +1)>=10))
+									{	
+										s.setInt(4, 4);
+									}	
+								}
+							
+								else
+								{
+									s.setString(2,""); 
+								}
+								
+								if(longdebt.size()>0)
+								{	
+									if(!longdebt.get(k).equals(""))
+									{	
+										s.setDouble(5,nf.parse(longdebt.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(5, 0.0);
+									}
+									System.out.println(longdebt.get(k));
+								}
+								else
+								{
+									s.setDouble(5, 0.0);
+								}
+								if(shortdebt.size()>0)
+								{
+									if(!shortdebt.get(k).equals(""))
+									{
+										s.setDouble(6,nf.parse(shortdebt.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(6, 0.0);
+									}
+									System.out.println(shortdebt.get(k));
+								}
+								else
+								{
+									s.setDouble(6, 0.0);
+								}
+								if(totalshare.size()>0)
+								{	
+									if(!totalshare.get(k).equals(""))
+									{	
+										s.setDouble(7,nf.parse(totalshare.get(k)).doubleValue());
+									}	
+									else
+									{
+										s.setDouble(7, 0.0);
+									}
+									System.out.println(totalshare.get(k));
+								}
+								else
+								{
+									s.setDouble(7, 0.0);
+								}
+								if(totallias.size()>0)
+								{	
+									if(!totallias.get(k).equals(""))
+									{	
+										s.setDouble(8,nf.parse(totallias.get(k)).doubleValue());
+									}	
+									else
+									{
+										s.setDouble(8, 0.0);
+									}
+									System.out.println(totallias.get(k));
+								}
+								else
+								{
+									s.setDouble(8, 0.0);
+								}
+								
+								s.execute();
+								s.close();
+						
+							}	
+						}
+					}	
+			
+				}
+		    }
+		    catch(HttpStatusException ste)
+		    {
+		    	System.out.println("ticker http error");
+		    }
+		}
+
+	dbconnection.close();
+	}	
+	
+	@Test
+	public void retrieve_ZScoreFromAdvfn_year() throws ClientProtocolException, IOException, DataFormatException, Exception
+	{
+	    
+		try {
+	
+			Class.forName("com.mysql.jdbc.Driver");
+	
+		} catch (ClassNotFoundException e) {
+	
+			System.out.println("Where is your MySQL JDBC Driver?");
+			e.printStackTrace();
+			return;
+	
+		}
+	
+		System.out.println("MySQL JDBC Driver Registered!");
+		Connection dbconnection = null;
+	
+		try {
+			dbconnection = DriverManager.getConnection("jdbc:mysql://localhost:3306/stock",
+			"root", "M1ng@2011");
+	
+		} catch (SQLException e) {
+			System.out.println("Connection Failed! Check output console");
+			e.printStackTrace();
+			return;
+		}
+	
+		if (dbconnection != null) {
+			System.out.println("You made it, take control your database now!");
+		} else {
+			System.out.println("Failed to make connection!");
+		}
+
+
+		ArrayList<String> tickets = new ArrayList<String>();
+
+		try
+		{
+	
+			//csv file containing data
+			String strFile = "/Users/minglei/Documents/StockDataInMysql/sp500.csv";
+			//String strFile = "c:\\test\\nasdaq2000.csv";
+			//create BufferedReader to read csv file
+			BufferedReader br = new BufferedReader( new FileReader(strFile));
+			String strLine = "";
+			StringTokenizer st = null;
+			int lineNumber = 0, tokenNumber = 0;
+		
+			//read comma separated file line by line
+			while( (strLine = br.readLine()) != null)
+			{
+				if(!strLine.isEmpty()&& strLine.length()>0)
+				tickets.add(strLine);
+			}
+	
+	
+		}
+		catch(Exception e)
+		{
+			System.out.println("Exception while reading csv file: " + e);
+		}
+		//List<String> tickers = new ArrayList<String>();
+		//tickers.add("GOOG"); tickers.add("JPM"); //tickers.add("AAPL"); tickers.add("GE"); tickers.add("F");
+		for(String ticker: tickets)
+		{	
+			String str_url = "http://ih.advfn.com/p.php?pid=financials&btn=annual_reports&ctl00%24sb3%24tbq1=Get+Quote&as_values_IH=&ctl00%24sb3%24stb1=Search+iHub&mode=&symbol=" +ticker;
+			System.out.println(str_url);
+		
+		    try
+		    {
+				Document doc = Jsoup.connect(str_url).timeout(60000).get();
+			
+				Elements els = doc.select("span").attr("style", "text-transform: capitalize");
+			
+				for(Element el: els)
+				{	
+					Elements tables = el.select("table");
+					if(tables!=null)
+					{	
+						if(tables.size()>1)
+						{	
+							Element tb1 = tables.get(1);
+							//System.out.println(tb1);
+							Elements trs = tb1.select("tr");
+							Element tr2 = trs.get(0);
+							Elements tds2 = tr2.select("td");
+							Element td2 = tds2.get(0);
+							Element tb2 = td2.select("table").get(0);
+							Elements tr2s = tb2.select("tr");
+						
+							Map<String, List<String>> aMap = new HashMap<String, List<String>> ();
+						
+							for(Element tr: tr2s)
+							{
+								List<String> alist = new ArrayList<String>();
+								Elements tds = tr.select("td");
+								int i =0;
+								for(Element td: tds)
+								{
+									if(td.hasAttr("colspan"))
+									{
+										continue;
+								
+									}
+									else
+									{	
+										if(i==0)
+										{	
+											aMap.put(td.text(), alist);
+										}
+										if(i>0)
+										{
+											if(!td.text().equals(""))
+												alist.add(td.text());
+										}
+									}	
+							
+									System.out.println(td.text()+ " i=" +i);
+									i++;		
+								}
+							}
+							System.out.println(aMap);
+						
+							List<String> workingcapitals = new ArrayList<String>();
+							List<String> totalassets = new ArrayList<String>();
+							List<String> retainearnings = new ArrayList<String>();
+							List<String> ebits = new ArrayList<String>();
+							List<String> marketvalues = new ArrayList<String>();						
+							List<String> totalliabilities = new ArrayList<String>();						
+							List<String> sales = new ArrayList<String>();
+							List<String> timeperiods = new ArrayList<String>();
+							
+							for(String key: aMap.keySet())
+							{	
+								if("Year end date".equalsIgnoreCase(key)){
+									timeperiods = aMap.get(key);
+								}
+								if("working capital".equalsIgnoreCase(key)){
+									workingcapitals = aMap.get(key);
+								}
+								if("total assets".equalsIgnoreCase(key)){
+									totalassets = aMap.get(key);
+								}if("retained earnings".equalsIgnoreCase(key)){
+									retainearnings = aMap.get(key);
+								}if("EBIT".equalsIgnoreCase(key)){
+									ebits = aMap.get(key);
+								}if("total equity".equalsIgnoreCase(key)){
+									marketvalues = aMap.get(key);
+								}if("total liabilities".equalsIgnoreCase(key)){
+									totalliabilities = aMap.get(key);
+								}if("operating revenue".equalsIgnoreCase(key)){
+									sales = aMap.get(key);
+								}
+							}	
+							String patternOne = "#,##0.00";
+							DecimalFormat nf = new DecimalFormat(patternOne);
+							for(int k=0; k<workingcapitals.size(); k++)
+							{	
+							
+								String insertsql = "INSERT INTO stock.zscore_year (ticket, day, year, workingcapital, totalasset, retainedearning, ebit,maketvalueequity, totalliablities, sales) VALUES (?,?,?,?,?,?,?,?,?,?)";
+								PreparedStatement s = dbconnection.prepareStatement(insertsql);
+								s.setString(1,ticker);
+								if(timeperiods.size()>0)
+								{
+									s.setString(2,timeperiods.get(k));  
+									System.out.println(timeperiods.get(k));
+									if(!(timeperiods.get(k).equals("") || timeperiods.get(k).equals("0000/00") ||timeperiods.get(k).equals("0000/0") || timeperiods.get(k).equals("0000-00") ||timeperiods.get(k).equals("0000-0")))
+									{	
+										SimpleDateFormat dateFormatter = new SimpleDateFormat("yyyy/MM");
+										Date day = new Date();
+										try
+										{
+											day = dateFormatter.parse(timeperiods.get(k));
+											if(day.equals("")) break;
+										}	
+										catch(ParseException e)
+										{
+											SimpleDateFormat dateFormatter2 = new SimpleDateFormat("yyyy-MM");
+											day = dateFormatter2.parse(timeperiods.get(k));
+										}
+											
+										s.setInt(3, (day.getYear()+1900));
+									}
+								}
+								else
+								{
+									s.setString(2,""); 
+								}
+								if(workingcapitals.size()>0)
+								{	
+									if(!workingcapitals.get(k).equals(""))
+									{	
+										s.setDouble(4,nf.parse(workingcapitals.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(4, 0.0);
+									}
+									System.out.println(workingcapitals.get(k));
+								}
+								else
+								{
+									s.setDouble(4, 0.0);
+								}
+								if(totalassets.size()>0)
+								{
+									if(!totalassets.get(k).equals(""))
+									{
+										s.setDouble(5,nf.parse(totalassets.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(5, 0.0);
+									}
+									System.out.println(totalassets.get(k));
+								}
+								else
+								{
+									s.setDouble(5, 0.0);
+								}
+								if(retainearnings.size()>0)
+								{	
+									if(!retainearnings.get(k).equals(""))
+									{	
+										s.setDouble(6,nf.parse(retainearnings.get(k)).doubleValue());
+									}	
+									else
+									{
+										s.setDouble(6, 0.0);
+									}
+									System.out.println(retainearnings.get(k));
+								}
+								else
+								{
+									s.setDouble(6, 0.0);
+								}
+								if(ebits.size()>0)
+								{
+									if(!ebits.get(k).equals(""))
+									{	
+										s.setDouble(7,nf.parse(ebits.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(7, 0.0);
+									}
+									System.out.println(ebits.get(k));
+								}
+								else
+								{
+									s.setDouble(7, 0.0);
+								}
+								if(marketvalues.size()>0)
+								{
+									if(!marketvalues.get(k).equals(""))
+									{	
+										s.setDouble(8,nf.parse(marketvalues.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(8, 0.0);
+									}
+									System.out.println(marketvalues.get(k));
+								}
+								else
+								{
+									s.setDouble(8, 0.0);
+								}
+								if(totalliabilities.size()>0)
+								{
+									if(!totalliabilities.get(k).equals(""))
+									{	
+										s.setDouble(9,nf.parse(totalliabilities.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(9, 0.0);
+									}
+									System.out.println(totalliabilities.get(k));
+								}
+								else
+								{
+									s.setDouble(9, 0.0);
+								}
+								if(sales.size()>0)
+								{
+									if(!sales.get(k).equals(""))
+									{	
+										s.setDouble(10,nf.parse(sales.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(10, 0.0);
+									}
+									System.out.println(sales.get(k));
+								}
+								else
+								{
+									s.setDouble(10, 0.0);
+								}
+								
+								s.execute();
+								s.close();
+						
+							}	
+						}
+					}	
+			
+				}
+		    }
+		    catch(HttpStatusException ste)
+		    {
+		    	System.out.println("ticker http error");
+		    }
+		}
+
+	dbconnection.close();
+	}	
+	
+	@Test
+	public void retrieve_ZScoreFromAdvfn() throws ClientProtocolException, IOException, DataFormatException, Exception
+	{
+	    
+		try {
+	
+			Class.forName("com.mysql.jdbc.Driver");
+	
+		} catch (ClassNotFoundException e) {
+	
+			System.out.println("Where is your MySQL JDBC Driver?");
+			e.printStackTrace();
+			return;
+	
+		}
+	
+		System.out.println("MySQL JDBC Driver Registered!");
+		Connection dbconnection = null;
+	
+		try {
+			dbconnection = DriverManager.getConnection("jdbc:mysql://localhost:3306/stock",
+			"root", "M1ng@2011");
+	
+		} catch (SQLException e) {
+			System.out.println("Connection Failed! Check output console");
+			e.printStackTrace();
+			return;
+		}
+	
+		if (dbconnection != null) {
+			System.out.println("You made it, take control your database now!");
+		} else {
+			System.out.println("Failed to make connection!");
+		}
+
+
+		ArrayList<String> tickets = new ArrayList<String>();
+
+		try
+		{
+	
+			//csv file containing data
+			String strFile = "/Users/minglei/Documents/StockDataInMysql/sp500.csv";
+			//String strFile = "c:\\test\\nasdaq2000.csv";
+			//create BufferedReader to read csv file
+			BufferedReader br = new BufferedReader( new FileReader(strFile));
+			String strLine = "";
+			StringTokenizer st = null;
+			int lineNumber = 0, tokenNumber = 0;
+		
+			//read comma separated file line by line
+			while( (strLine = br.readLine()) != null)
+			{
+				if(!strLine.isEmpty()&& strLine.length()>0)
+				tickets.add(strLine);
+			}
+	
+	
+		}
+		catch(Exception e)
+		{
+			System.out.println("Exception while reading csv file: " + e);
+		}
+		//List<String> tickers = new ArrayList<String>();
+		//tickers.add("GOOG"); tickers.add("JPM"); //tickers.add("AAPL"); tickers.add("GE"); tickers.add("F");
+		for(String ticker: tickets)
+		{	
+			String str_url = "http://ih.advfn.com/p.php?pid=financials&btn=quarterly_reports&ctl00%24sb3%24tbq1=Get+Quote&as_values_IH=&ctl00%24sb3%24stb1=Search+iHub&mode=&symbol=" +ticker;
+			System.out.println(str_url);
+		
+		    try
+		    {
+				Document doc = Jsoup.connect(str_url).timeout(60000).get();
+			
+				Elements els = doc.select("span").attr("style", "text-transform: capitalize");
+			
+				for(Element el: els)
+				{	
+					Elements tables = el.select("table");
+					if(tables!=null)
+					{	
+						if(tables.size()>1)
+						{	
+							Element tb1 = tables.get(1);
+							//System.out.println(tb1);
+							Elements trs = tb1.select("tr");
+							Element tr2 = trs.get(0);
+							Elements tds2 = tr2.select("td");
+							Element td2 = tds2.get(0);
+							Element tb2 = td2.select("table").get(0);
+							Elements tr2s = tb2.select("tr");
+						
+							Map<String, List<String>> aMap = new HashMap<String, List<String>> ();
+						
+							for(Element tr: tr2s)
+							{
+								List<String> alist = new ArrayList<String>();
+								Elements tds = tr.select("td");
+								int i =0;
+								for(Element td: tds)
+								{
+									if(td.hasAttr("colspan"))
+									{
+										continue;
+								
+									}
+									else
+									{	
+										if(i==0)
+										{	
+											aMap.put(td.text(), alist);
+										}
+										if(i>0)
+										{
+											alist.add(td.text());
+										}
+									}	
+							
+									System.out.println(td.text()+ " i=" +i);
+									i++;		
+								}
+							}
+							System.out.println(aMap);
+						
+							List<String> workingcapitals = new ArrayList<String>();
+							List<String> totalassets = new ArrayList<String>();
+							List<String> retainearnings = new ArrayList<String>();
+							List<String> ebits = new ArrayList<String>();
+							List<String> marketvalues = new ArrayList<String>();						
+							List<String> totalliabilities = new ArrayList<String>();						
+							List<String> sales = new ArrayList<String>();
+							List<String> timeperiods = new ArrayList<String>();
+							
+							for(String key: aMap.keySet())
+							{	
+								if("quarter end date".equalsIgnoreCase(key)){
+									timeperiods = aMap.get(key);
+								}
+								if("working capital".equalsIgnoreCase(key)){
+									workingcapitals = aMap.get(key);
+								}
+								if("total assets".equalsIgnoreCase(key)){
+									totalassets = aMap.get(key);
+								}if("retained earnings".equalsIgnoreCase(key)){
+									retainearnings = aMap.get(key);
+								}if("EBIT".equalsIgnoreCase(key)){
+									ebits = aMap.get(key);
+								}if("total equity".equalsIgnoreCase(key)){
+									marketvalues = aMap.get(key);
+								}if("total liabilities".equalsIgnoreCase(key)){
+									totalliabilities = aMap.get(key);
+								}if("operating revenue".equalsIgnoreCase(key)){
+									sales = aMap.get(key);
+								}
+							}	
+							String patternOne = "#,##0.00";
+							DecimalFormat nf = new DecimalFormat(patternOne);
+							for(int k=0; k<workingcapitals.size(); k++)
+							{	
+							
+								String insertsql = "INSERT INTO stock.zscore (ticket, day, year, quater, workingcapital, totalasset, retainedearning, ebit,maketvalueequity, totalliablities, sales) VALUES (?,?,?,?,?,?,?,?,?,?,?)";
+								PreparedStatement s = dbconnection.prepareStatement(insertsql);
+								s.setString(1,ticker);
+								if(timeperiods.size()>0)
+								{
+									s.setString(2,timeperiods.get(k));  
+									System.out.println(timeperiods.get(k));
+									if(!(timeperiods.get(k).equals("") || timeperiods.get(k).equals("0000/00") ||timeperiods.get(k).equals("0000/0") || timeperiods.get(k).equals("0000-00") ||timeperiods.get(k).equals("0000-0")))
+									{	
+										SimpleDateFormat dateFormatter = new SimpleDateFormat("yyyy/MM");
+										Date day = new Date();
+										try
+										{
+											day = dateFormatter.parse(timeperiods.get(k));
+										}	
+										catch(ParseException e)
+										{
+											SimpleDateFormat dateFormatter2 = new SimpleDateFormat("yyyy-MM");
+											day = dateFormatter2.parse(timeperiods.get(k));
+										}
+											
+										s.setInt(3, (day.getYear()+1900));
+										if(((day.getMonth()+1)<=3) && ((day.getMonth()+1)>=1))
+										{	
+											s.setInt(4, 1);
+										}	
+										if(((day.getMonth()+1)<=6) && ((day.getMonth()+1)>=4))
+										{	
+											s.setInt(4, 2);
+										}	
+										if(((day.getMonth()+1)<=9) && ((day.getMonth()+1)>=6))
+										{	
+											s.setInt(4, 3);
+										}	
+										if(((day.getMonth()+1)<=12) && ((day.getMonth() +1)>=10))
+										{	
+											s.setInt(4, 4);
+										}	
+									}
+								}
+								else
+								{
+									s.setString(2,""); 
+								}
+								if(workingcapitals.size()>0)
+								{	
+									if(!workingcapitals.get(k).equals(""))
+									{	
+										s.setDouble(5,nf.parse(workingcapitals.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(5, 0.0);
+									}
+									System.out.println(workingcapitals.get(k));
+								}
+								else
+								{
+									s.setDouble(5, 0.0);
+								}
+								if(totalassets.size()>0)
+								{
+									if(!totalassets.get(k).equals(""))
+									{
+										s.setDouble(6,nf.parse(totalassets.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(6, 0.0);
+									}
+									System.out.println(totalassets.get(k));
+								}
+								else
+								{
+									s.setDouble(6, 0.0);
+								}
+								if(retainearnings.size()>0)
+								{	
+									if(!retainearnings.get(k).equals(""))
+									{	
+										s.setDouble(7,nf.parse(retainearnings.get(k)).doubleValue());
+									}	
+									else
+									{
+										s.setDouble(7, 0.0);
+									}
+									System.out.println(retainearnings.get(k));
+								}
+								else
+								{
+									s.setDouble(7, 0.0);
+								}
+								if(ebits.size()>0)
+								{
+									if(!ebits.get(k).equals(""))
+									{	
+										s.setDouble(8,nf.parse(ebits.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(8, 0.0);
+									}
+									System.out.println(ebits.get(k));
+								}
+								else
+								{
+									s.setDouble(8, 0.0);
+								}
+								if(marketvalues.size()>0)
+								{
+									if(!marketvalues.get(k).equals(""))
+									{	
+										s.setDouble(9,nf.parse(marketvalues.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(9, 0.0);
+									}
+									System.out.println(marketvalues.get(k));
+								}
+								else
+								{
+									s.setDouble(9, 0.0);
+								}
+								if(totalliabilities.size()>0)
+								{
+									if(!totalliabilities.get(k).equals(""))
+									{	
+										s.setDouble(10,nf.parse(totalliabilities.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(10, 0.0);
+									}
+									System.out.println(totalliabilities.get(k));
+								}
+								else
+								{
+									s.setDouble(10, 0.0);
+								}
+								if(sales.size()>0)
+								{
+									if(!sales.get(k).equals(""))
+									{	
+										s.setDouble(11,nf.parse(sales.get(k)).doubleValue());
+									}
+									else
+									{
+										s.setDouble(11, 0.0);
+									}
+									System.out.println(sales.get(k));
+								}
+								else
+								{
+									s.setDouble(11, 0.0);
+								}
+								
+								s.execute();
+								s.close();
+						
+							}	
+						}
+					}	
+			
+				}
+		    }
+		    catch(HttpStatusException ste)
+		    {
+		    	System.out.println("ticker http error");
+		    }
+		}
+
+	dbconnection.close();
+	}	
 	
 	@Test
 	public void retrieve_EarningFromAdvfn() throws ClientProtocolException, IOException, Exception
@@ -111,8 +1049,8 @@ public class StockRetriever {
 		{
 			System.out.println("Exception while reading csv file: " + e);
 		}
-		List<String> tickers = new ArrayList<String>();
-		tickers.add("GOOG"); tickers.add("JPM"); //tickers.add("AAPL"); tickers.add("GE"); tickers.add("F");
+		//List<String> tickers = new ArrayList<String>();
+		//tickers.add("GOOG"); tickers.add("JPM"); //tickers.add("AAPL"); tickers.add("GE"); tickers.add("F");
 		for(String ticker: tickets)
 		{	
 			String str_url = "http://ih.advfn.com/p.php?pid=financials&btn=quarterly_reports&ctl00%24sb3%24tbq1=Get+Quote&as_values_IH=&ctl00%24sb3%24stb1=Search+iHub&mode=&symbol=" +ticker;
@@ -772,11 +1710,11 @@ public class StockRetriever {
 		
 		ArrayList<String> tickets = new ArrayList<String>();
 		
-		 try
+		/* try
 	     {
 	            
 	             //csv file containing data
-	            String strFile = "/Users/minglei/Documents/StockDataInMysql/sp501.csv";
+	            String strFile = "/Users/minglei/Documents/StockDataInMysql/sp4571.txt";
 			 	//String strFile = "c:\\test\\nasdaq2000.csv";
 	             //create BufferedReader to read csv file
 	             BufferedReader br = new BufferedReader( new FileReader(strFile));
@@ -796,7 +1734,9 @@ public class StockRetriever {
 	     catch(Exception e)
 	     {
 	             System.out.println("Exception while reading csv file: " + e);                  
-	     }
+	     }*/
+		 
+		 tickets.add("YHOO");
 		
 		 for(String ticker: tickets)
 		 {	 
@@ -809,44 +1749,45 @@ public class StockRetriever {
 	
 	
 			//System.out.println(eles);
+			if(eles!=null)
+			{	
+				Elements headers = eles.getElementsByClass("bordered");
 	
-			Elements headers = eles.getElementsByClass("bordered");
-	
-			int i =0;
-			for(Element header1: headers) 
-			{
-				if(i>0)
+				int i =0;
+				for(Element header1: headers) 
 				{
-					System.out.println(header1);
-					Elements trs = header1.select("tr");
-					int size = trs.size();
-					int j=0;
-					for(j=1; j<size; j++) 
+					if(i>0)
 					{
-						Element tr = trs.get(j);
-						Elements tds = tr.select("td");
-						String insertsql = "INSERT INTO stock.earningsuperise (ticker, reportday,period,estimated,reported,superise,superisepercent) "
+						System.out.println(header1);
+						Elements trs = header1.select("tr");
+						int size = trs.size();
+						int j=0;
+						for(j=1; j<size; j++) 
+						{
+							Element tr = trs.get(j);
+							Elements tds = tr.select("td");
+							String insertsql = "INSERT INTO stock.earningsuperise (ticker, reportday,period,estimated,reported,superise,superisepercent) "
 				                   
 					                    + " VALUES (?,?,?,?,?,?,?)" ;
-						PreparedStatement ps = dbconnection.prepareStatement(insertsql);
-						ps.setString(1, ticker);
-						for(int k=0; k<tds.size(); k++)
-						{
-							Element td =  tds.get(k);
+							PreparedStatement ps = dbconnection.prepareStatement(insertsql);
+							ps.setString(1, ticker);
+							for(int k=0; k<tds.size(); k++)
+							{
+								Element td =  tds.get(k);
 		    
-							ps.setString(k+2, td.text());
+								ps.setString(k+2, td.text());
 					 
 							   
-							System.out.println(td.text());
+								System.out.println(td.text());
+							}
+							ps.execute();
+							ps.close();
 						}
-						 ps.execute();
-						 ps.close();
-					}
 	
+					}
+					i++;
 				}
-				i++;
-			}
-
+			}	
 		 }	
 		 dbconnection.close();
 	}
@@ -1486,6 +2427,495 @@ public void retrieve_comp() throws ClientProtocolException, IOException, Excepti
 //    	System.out.println(reportedEPS);
 		
 	}
+	
+	
+	@Test
+	public void Earings_Year_Collect() throws IOException, SQLException, ParseException {
+		try {
+			 
+			Class.forName("com.mysql.jdbc.Driver");
+ 
+		} catch (ClassNotFoundException e) {
+ 
+			System.out.println("Where is your MySQL JDBC Driver?");
+			e.printStackTrace();
+			return;
+ 
+		}
+ 
+		System.out.println("MySQL JDBC Driver Registered!");
+		Connection dbconnection = null;
+ 
+		try {
+			dbconnection = DriverManager.getConnection("jdbc:mysql://localhost:3306/stock",
+							"root", "M1ng@2011");
+ 
+		} catch (SQLException e) {
+			System.out.println("Connection Failed! Check output console");
+			e.printStackTrace();
+			return;
+		}
+ 
+		if (dbconnection != null) {
+			System.out.println("You made it, take control your database now!");
+		} else {
+			System.out.println("Failed to make connection!");
+		}
+		
+		
+		//Map<String, Map<Date, Map<String, String>>> ValuationM = new TreeMap<String, Map<Date, Map<String, String>>>();
+		
+		
+		
+		
+		ArrayList<String> tickets = new ArrayList<String>();
+		
+		 try
+         {
+                
+                 //csv file containing data
+                String strFile = "/Users/minglei/Documents/StockDataInMysql/sp500.csv";
+			 	//String strFile = "c:\\test\\nasdaq2000.csv";
+                 //create BufferedReader to read csv file
+                 BufferedReader br = new BufferedReader( new FileReader(strFile));
+                 String strLine = "";
+                 StringTokenizer st = null;
+                 int lineNumber = 0, tokenNumber = 0;
+                
+                 //read comma separated file line by line
+                 while( (strLine = br.readLine()) != null)
+                 {
+                	 if(!strLine.isEmpty()&& strLine.length()>0)
+                	 tickets.add(strLine);
+                 }
+                
+                
+         }
+         catch(Exception e)
+         {
+                 System.out.println("Exception while reading csv file: " + e);                  
+         }
+//	    tickets.add("AMZN");
+//		tickets.add("AA");
+//		tickets.add("AAPL");
+		ArrayList<String> reportDate= new ArrayList<String>();
+		reportDate.add("2003");
+		reportDate.add("2004");
+		reportDate.add("2005");
+		reportDate.add("2006");
+		reportDate.add("2007");
+		reportDate.add("2008");
+		reportDate.add("2009");
+		reportDate.add("2010");
+		reportDate.add("2011");
+		reportDate.add("2012");
+		reportDate.add("2013");
+		
+		String[] reportedEPS=new String[12];
+		                    
+		for(String s: tickets)
+		{	
+			
+			DefaultHttpClient httpclient = new DefaultHttpClient();
+           
+          
+           HttpGet get = new HttpGet("http://financials.morningstar.com/ajax/exportKR2CSV.html?&t="+s);
+           HttpResponse response = httpclient.execute(get);
+           HttpEntity entity = response.getEntity();
+           String entityContents = EntityUtils.toString(entity);
+           String[] strlines = entityContents.split(System.getProperty("line.separator"));
+           for(String sline: strlines) 
+           {      
+               System.out.println(sline);
+               String[] ss = sline.split(",");
+               for(String scell: ss)
+               {
+            	   if(scell.equals("Earnings Per Share USD"))
+            	   {
+            		   reportedEPS = ss;
+            		   break;
+            	   }
+               }
+              
+           }  
+			
+			for(int i=0; i<reportDate.size(); i++)
+			{
+				String strsql = "INSERT INTO earnings (ticker, year, earnings) VALUES (?,?,?)";
+				PreparedStatement ps = dbconnection.prepareStatement(strsql);
+				ps.setString(1, s);
+				ps.setString(2, reportDate.get(i));
+				
+				String reEPS = "0";
+				String patternOne = "#,##0.00";
+				DecimalFormat nf = new DecimalFormat(patternOne);
+				if(i<=reportedEPS.length-2)
+				{	
+					reEPS= reportedEPS[i+1];					
+				}
+				
+				double reEPSd;
+				if(reEPS==null || reEPS.equalsIgnoreCase("NA")||reEPS.equalsIgnoreCase("")) reEPSd = -999.0;
+				else reEPSd = nf.parse(reEPS).doubleValue();
+				ps.setDouble(3, reEPSd);
+				
+				ps.execute();
+				
+			}
+			
+		}
+		
+		
+	}
+	@Test
+	public void GrossMagin_Year_Collect() throws IOException, SQLException, ParseException {
+		try {
+			 
+			Class.forName("com.mysql.jdbc.Driver");
+ 
+		} catch (ClassNotFoundException e) {
+ 
+			System.out.println("Where is your MySQL JDBC Driver?");
+			e.printStackTrace();
+			return;
+ 
+		}
+ 
+		System.out.println("MySQL JDBC Driver Registered!");
+		Connection dbconnection = null;
+ 
+		try {
+			dbconnection = DriverManager.getConnection("jdbc:mysql://localhost:3306/stock",
+							"root", "M1ng@2011");
+ 
+		} catch (SQLException e) {
+			System.out.println("Connection Failed! Check output console");
+			e.printStackTrace();
+			return;
+		}
+ 
+		if (dbconnection != null) {
+			System.out.println("You made it, take control your database now!");
+		} else {
+			System.out.println("Failed to make connection!");
+		}
+		
+		
+		//Map<String, Map<Date, Map<String, String>>> ValuationM = new TreeMap<String, Map<Date, Map<String, String>>>();
+		
+		
+		
+		
+		ArrayList<String> tickets = new ArrayList<String>();
+		
+		 try
+         {
+                
+                 //csv file containing data
+                String strFile = "/Users/minglei/Documents/StockDataInMysql/sp500.csv";
+			 	//String strFile = "c:\\test\\nasdaq2000.csv";
+                 //create BufferedReader to read csv file
+                 BufferedReader br = new BufferedReader( new FileReader(strFile));
+                 String strLine = "";
+                 StringTokenizer st = null;
+                 int lineNumber = 0, tokenNumber = 0;
+                
+                 //read comma separated file line by line
+                 while( (strLine = br.readLine()) != null)
+                 {
+                	 if(!strLine.isEmpty()&& strLine.length()>0)
+                	 tickets.add(strLine);
+                 }
+                
+                
+         }
+         catch(Exception e)
+         {
+                 System.out.println("Exception while reading csv file: " + e);                  
+         }
+//	    tickets.add("AMZN");
+//		tickets.add("AA");
+//		tickets.add("AAPL");
+		ArrayList<String> reportDate= new ArrayList<String>();
+		reportDate.add("2003");
+		reportDate.add("2004");
+		reportDate.add("2005");
+		reportDate.add("2006");
+		reportDate.add("2007");
+		reportDate.add("2008");
+		reportDate.add("2009");
+		reportDate.add("2010");
+		reportDate.add("2011");
+		reportDate.add("2012");
+		reportDate.add("2013");
+		
+		String[] reportedEPS=new String[12];
+		                    
+		for(String s: tickets)
+		{	
+			
+			DefaultHttpClient httpclient = new DefaultHttpClient();
+           
+          
+           HttpGet get = new HttpGet("http://financials.morningstar.com/ajax/exportKR2CSV.html?&t="+s);
+           HttpResponse response = httpclient.execute(get);
+           HttpEntity entity = response.getEntity();
+           String entityContents = EntityUtils.toString(entity);
+           String[] strlines = entityContents.split(System.getProperty("line.separator"));
+           for(String sline: strlines) 
+           {      
+               System.out.println(sline);
+               String[] ss = sline.split(",");
+               for(String scell: ss)
+               {
+            	   if(scell.equals("Gross Margin %"))
+            	   {
+            		   reportedEPS = ss;
+            		   break;
+            	   }
+               }
+              
+           }  
+			
+			for(int i=0; i<reportDate.size(); i++)
+			{
+				String strsql = "INSERT INTO grossmargin (ticker, year, grossmargin) VALUES (?,?,?)";
+				PreparedStatement ps = dbconnection.prepareStatement(strsql);
+				ps.setString(1, s);
+				ps.setString(2, reportDate.get(i));
+				
+				String reEPS = "0";
+				String patternOne = "#,##0.00";
+				DecimalFormat nf = new DecimalFormat(patternOne);
+				if(i<=reportedEPS.length-2)
+				{	
+					reEPS= reportedEPS[i+1];					
+				}
+				
+				double reEPSd;
+				if(reEPS==null || reEPS.equalsIgnoreCase("NA")||reEPS.equalsIgnoreCase("")) reEPSd = -999.0;
+				else reEPSd = nf.parse(reEPS).doubleValue();
+				ps.setDouble(3, reEPSd);
+				
+				ps.execute();
+				
+			}
+			
+		}
+		
+		
+	}
+	
+	@Test
+	public void dataCollect_yahoo_ipodate() throws IOException, SQLException, ParseException {
+		
+		
+		try {
+			 
+			Class.forName("com.mysql.jdbc.Driver");
+ 
+		} catch (ClassNotFoundException e) {
+ 
+			System.out.println("Where is your MySQL JDBC Driver?");
+			e.printStackTrace();
+			return;
+ 
+		}
+ 
+		System.out.println("MySQL JDBC Driver Registered!");
+		Connection dbconnection = null;
+ 
+		try {
+			dbconnection = DriverManager.getConnection("jdbc:mysql://localhost:3306/stock",
+							"root", "M1ng@2011");
+ 
+		} catch (SQLException e) {
+			System.out.println("Connection Failed! Check output console");
+			e.printStackTrace();
+			return;
+		}
+ 
+		if (dbconnection != null) {
+			System.out.println("You made it, take control your database now!");
+		} else {
+			System.out.println("Failed to make connection!");
+		}
+		
+		Map<String, Map<String, String>> ValuationM = new TreeMap<String, Map<String, String>>();
+		
+		
+		
+		
+		ArrayList<String> tickets = new ArrayList<String>();
+		
+		 try
+         {
+                
+                 //csv file containing data
+                String strFile = "/Users/minglei/Documents/StockDataInMysql/sp500.csv";
+			 	//String strFile = "c:\\test\\nasdaq2000.csv";
+                 //create BufferedReader to read csv file
+                 BufferedReader br = new BufferedReader( new FileReader(strFile));
+                 String strLine = "";
+                 StringTokenizer st = null;
+                 int lineNumber = 0, tokenNumber = 0;
+                
+                 //read comma separated file line by line
+                 while( (strLine = br.readLine()) != null)
+                 {
+                	 if(!strLine.isEmpty()&& strLine.length()>0)
+                	 tickets.add(strLine);
+                 }
+                
+                
+         }
+         catch(Exception e)
+         {
+                 System.out.println("Exception while reading csv file: " + e);                  
+         }
+//	    tickets.add("AMZN");
+//		tickets.add("AA");
+//		tickets.add("AAPL");
+		for(String s: tickets)
+		{	
+			String str_url = "http://finance.yahoo.com/q?s=" +s +"&ql=1";
+			Document doc = Jsoup.connect(str_url).get();
+			Elements eles = doc.getElementsByClass("1.28</td></tr>");
+			
+			Iterator<Element> it = eles.iterator();
+			Map<String, String> datamap = new TreeMap<String, String>();
+			while(it.hasNext())
+			{	
+				Element el = it.next();
+				Elements teles = el.getElementsByClass("yfnc_tablehead1");
+				//System.out.println(teles.toString());
+				
+				Elements seles = el.getElementsByClass("yfnc_tabledata1");
+				//System.out.println(seles.toString());
+				int size = teles.size();
+				for(int i=0; i< size; i++){
+					datamap.put(teles.get(i).text(), seles.get(i).text());
+				}
+				
+				//System.out.println(ValuationM);
+			}
+			ValuationM.put(s, datamap);
+		}
+		
+		for(String t:ValuationM.keySet())
+		   System.out.println(t +" : "+ ValuationM.get(t));
+		System.out.println(ValuationM.keySet());
+		System.out.println(ValuationM.keySet().size());
+		
+		//dbconnection.setAutoCommit(false);
+		String strsql = "INSERT INTO key_financial (ticker, currentpe, peg, cpe, debtEquitratio, dividendYield, cashPerShare,  grossMargin, returnOnEquity, y3enegrowthrate, currentRatio, enterprisevalue) VALUES (?,?,?,?,?,?,?,?,?,?,?, ?)";
+		
+	
+		try
+		{
+//			NumberFormat nf = NumberFormat.getInstance(Locale.ENGLISH);
+//			nf.setMaximumFractionDigits(3);
+			final int batchSize = 10;
+			int count = 0;
+			String patternOne = "#,##0.00";
+			DecimalFormat nf = new DecimalFormat(patternOne);
+			NumberFormat pencenf = NumberFormat.getPercentInstance(Locale.ENGLISH);
+			for(String t: ValuationM.keySet())
+			{
+				PreparedStatement s = dbconnection.prepareStatement(strsql);
+				//s.setInt(1, id);
+				s.setString(1, t);
+				Map valMap = ValuationM.get(t);
+				Double current_pe;
+				String strpe = (String)valMap.get("Trailing P/E (ttm, intraday):");
+				if(strpe==null || strpe.equalsIgnoreCase("N/A")) current_pe = -999.0;
+				else current_pe = nf.parse(strpe).doubleValue();
+				s.setDouble(2, current_pe);
+				Double peg;
+				String strpeg = (String)valMap.get("PEG Ratio (5 yr expected)1:");
+				if(strpeg==null || strpeg.equalsIgnoreCase("N/A")) peg = -999.0;
+				else peg= nf.parse(strpeg).doubleValue();
+			
+				s.setDouble(3, peg);
+				
+				Double cpe;
+				String strcpe = (String)valMap.get("Price/Book (mrq):");
+				if(strcpe==null || strcpe.equalsIgnoreCase("N/A")) cpe = -999.0;
+				else cpe= nf.parse(strcpe).doubleValue();
+				s.setDouble(4, cpe);
+				
+				
+				Double debtequitratio;
+				String strdebtequitratio = (String)valMap.get("Total Debt/Equity (mrq):");
+				if(strdebtequitratio==null || strdebtequitratio.equalsIgnoreCase("N/A")) debtequitratio = -999.0;
+				else debtequitratio= nf.parse(strdebtequitratio).doubleValue();
+				s.setDouble(5, debtequitratio);
+				Double DividendYield;
+				String strDividendYield = (String)valMap.get("5 Year Average Dividend Yield4:");
+				if(strDividendYield ==null ||strDividendYield.equalsIgnoreCase("N/A")) DividendYield = -999.0;
+				else DividendYield = pencenf.parse(strDividendYield).doubleValue();
+				s.setDouble(6, DividendYield);
+				Double cashpershare;
+				String strCashPerShare = (String)valMap.get("Total Cash Per Share (mrq):");
+				if(strCashPerShare==null || strCashPerShare.equalsIgnoreCase("N/A")) cashpershare = -999.0;
+				else cashpershare = nf.parse(strCashPerShare).doubleValue();
+				s.setDouble(7, cashpershare);
+				Double GrossMargin;
+				String strGrossMargin = (String)valMap.get("Profit Margin (ttm):");
+				if(strGrossMargin  ==null || strGrossMargin .equalsIgnoreCase("N/A")) GrossMargin = -999.0;
+//				else {
+//					String margin = strGrossMargin.substring(0, strGrossMargin.length()-2);
+//					GrossMargin = Float.parseFloat(margin);
+//				}
+				else GrossMargin = pencenf.parse(strGrossMargin).doubleValue();
+				s.setDouble(8, GrossMargin);
+				
+				Double returnOnEquity;
+				String strreturnOnEquity = (String)valMap.get("Return on Equity (ttm):");
+				if(strreturnOnEquity ==null || strreturnOnEquity.equalsIgnoreCase("N/A")) returnOnEquity = -999.0;
+//				else {
+//					String strreturn = strreturnOnEquity.substring(0, strreturnOnEquity.length()-2);
+//				
+//					returnOnEquity = Float.parseFloat(strreturn);
+//				}
+				else returnOnEquity = pencenf.parse(strreturnOnEquity).doubleValue();
+				s.setDouble(9, returnOnEquity);
+				
+				Double y3EarningGrowthrate;
+				String stry3EarningGrowthrate = (String)valMap.get("Qtrly Revenue Growth (yoy):");
+				if(stry3EarningGrowthrate ==null || stry3EarningGrowthrate.equalsIgnoreCase("N/A")) y3EarningGrowthrate = -999.0;
+				else {
+//					String stry3return = stry3EarningGrowthrate.substring(0, stry3EarningGrowthrate.length()-2);
+//				
+//					y3EarningGrowthrate = Float.parseFloat(stry3return);
+					y3EarningGrowthrate = pencenf.parse(stry3EarningGrowthrate).doubleValue();
+				}
+				s.setDouble(10, y3EarningGrowthrate);
+				
+				Double currentRatio;
+				String strycurrentRatio = (String)valMap.get("Current Ratio (mrq):");
+				if(strycurrentRatio ==null ||strycurrentRatio.equalsIgnoreCase("N/A")) currentRatio = -999.0;
+				else currentRatio = nf.parse(strycurrentRatio).doubleValue();
+				s.setDouble(11, currentRatio);
+				
+				String strenterprisevalue = (String)valMap.get("Enterprise Value (Mar 9, 2013)3:");
+				s.setString(12, strenterprisevalue);
+					
+				s.execute();
+			
+				s.close();
+			}
+			
+	
+		}
+		finally 
+		{
+			
+			dbconnection.close();
+		}
+		
+	}
+	
 	
 	@Test
 	public void dataCollect() throws IOException, SQLException, ParseException {
